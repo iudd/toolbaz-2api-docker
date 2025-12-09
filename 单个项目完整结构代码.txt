@@ -1,0 +1,813 @@
+项目 'toolbaz-2api' 的结构树:
+📂 toolbaz-2api/
+    📄 .env
+    📄 .env.example
+    📄 Dockerfile
+    📄 docker-compose.yml
+    📄 main.py
+    📄 nginx.conf
+    📄 requirements.txt
+    📂 app/
+        📂 core/
+            📄 __init__.py
+            📄 config.py
+        📂 providers/
+            📄 __init__.py
+            📄 base_provider.py
+            📄 toolbaz_provider.py
+        📂 utils/
+            📄 __init__.py
+            📄 sse_utils.py
+    📂 static/
+        📄 index.html
+================================================================================
+
+--- 文件路径: .env ---
+
+# ====================================================================
+# toolbaz-2api 生产环境配置
+# ====================================================================
+
+API_MASTER_KEY=1
+APP_PORT=8000
+
+# --- 关键修改 ---
+# 网站限制每分钟5次请求，并发数必须设为 1，否则必报错
+BROWSER_POOL_SIZE=1
+
+CONTEXT_MAX_USES=50
+LOG_LEVEL=INFO
+
+--- 文件路径: .env.example ---
+
+# ====================================================================
+# toolbaz-2api 生产环境配置
+# ====================================================================
+
+API_MASTER_KEY=1
+APP_PORT=8000
+
+# --- 关键修改 ---
+# 网站限制每分钟5次请求，并发数必须设为 1，否则必报错
+BROWSER_POOL_SIZE=1
+
+CONTEXT_MAX_USES=50
+LOG_LEVEL=INFO
+
+--- 文件路径: Dockerfile ---
+
+# 使用官方 Python 镜像
+FROM python:3.10-slim
+
+# 设置环境变量
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV TZ=Asia/Shanghai
+# 设置 Playwright 浏览器路径
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+WORKDIR /app
+
+# 安装系统依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 复制依赖文件
+COPY requirements.txt .
+
+# 安装 Python 依赖 (使用清华源)
+RUN pip install --no-cache-dir --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple && \
+    pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# 安装 Playwright 浏览器 (Chromium)
+RUN playwright install chromium --with-deps
+
+# 复制应用代码
+COPY . .
+
+# 创建非 root 用户 (安全最佳实践)
+RUN useradd --create-home appuser && \
+    chown -R appuser:appuser /app && \
+    chown -R appuser:appuser /ms-playwright
+
+USER appuser
+
+# 暴露端口
+EXPOSE 8000
+
+# 启动命令
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+
+--- 文件路径: docker-compose.yml ---
+
+services:
+  app:
+    build: .
+    container_name: toolbaz-2api
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    env_file:
+      - .env
+    # 关键：增加共享内存，防止 Chromium 在 Docker 中崩溃
+    shm_size: '2gb'
+    # 优化 DNS，防止解析超时
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    networks:
+      - toolbaz-net
+
+networks:
+  toolbaz-net:
+    driver: bridge
+
+--- 文件路径: main.py ---
+
+import logging
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request, Depends, HTTPException, Header
+from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.core.config import settings
+from app.providers.toolbaz_provider import ToolbazProvider
+
+# 配置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("toolbaz-api")
+
+provider = ToolbazProvider()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info(f"启动 {settings.APP_NAME}...")
+    await provider.initialize()
+    yield
+    logger.info("正在关闭浏览器资源...")
+    await provider.close()
+
+app = FastAPI(title=settings.APP_NAME, version=settings.APP_VERSION, lifespan=lifespan)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 静态文件
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+async def verify_key(authorization: str = Header(None)):
+    if settings.API_MASTER_KEY and settings.API_MASTER_KEY != "1":
+        if not authorization or authorization != f"Bearer {settings.API_MASTER_KEY}":
+            raise HTTPException(status_code=401, detail="Invalid API Key")
+
+@app.post("/v1/chat/completions", dependencies=[Depends(verify_key)])
+async def chat_completions(request: Request):
+    try:
+        data = await request.json()
+        return await provider.chat_completion(data)
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/v1/models")
+async def list_models():
+    return await provider.get_models()
+
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    try:
+        with open("static/index.html", "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return "Toolbaz-2API Running. (static/index.html not found)"
+
+--- 文件路径: nginx.conf ---
+
+worker_processes auto;
+events { worker_connections 1024; }
+http {
+    upstream backend { server app:8080; }
+    server {
+        listen 80;
+        server_name localhost;
+        location / {
+            proxy_pass http://backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_buffering off;
+            proxy_cache off;
+            proxy_read_timeout 300s;
+        }
+    }
+}
+
+--- 文件路径: requirements.txt ---
+
+fastapi
+uvicorn[standard]
+pydantic-settings
+python-dotenv
+httpx
+playwright
+loguru
+beautifulsoup4
+
+--- 文件路径: app\core\__init__.py ---
+
+
+
+--- 文件路径: app\core\config.py ---
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import List
+
+class Settings(BaseSettings):
+    # 这一行告诉 Pydantic 自动去读取 .env 文件
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    APP_NAME: str = "toolbaz-2api"
+    APP_VERSION: str = "3.1.0 (Full-Models)"
+    
+    # 如果 .env 里没配 API_MASTER_KEY，默认就是 "1"
+    API_MASTER_KEY: str = "1"
+    
+    # 🔥 完整模型列表 (恢复了之前的所有模型)
+    MODELS: List[str] = [
+        "toolbaz-v4.5-fast",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+        "claude-sonnet-4",
+        "gpt-5",
+        "grok-4-fast"
+    ]
+    DEFAULT_MODEL: str = "toolbaz-v4.5-fast"
+
+    # 🔥 并发配置 (这里是默认值) 🔥
+    # 这里的 1 是为了防止你忘记配置 .env 时程序报错。
+    # 只要你在 .env 里写了 BROWSER_POOL_SIZE=5，这里的值就会被覆盖为 5。
+    BROWSER_POOL_SIZE: int = 1
+    
+    # 默认每个窗口用 50 次就重置
+    CONTEXT_MAX_USES: int = 50 
+
+settings = Settings()
+
+--- 文件路径: app\providers\__init__.py ---
+
+
+
+--- 文件路径: app\providers\base_provider.py ---
+
+from abc import ABC, abstractmethod
+from typing import Dict, Any
+from fastapi.responses import StreamingResponse, JSONResponse
+
+class BaseProvider(ABC):
+    @abstractmethod
+    async def chat_completion(self, request_data: Dict[str, Any]) -> StreamingResponse:
+        pass
+
+    @abstractmethod
+    async def get_models(self) -> JSONResponse:
+        pass
+
+--- 文件路径: app\providers\toolbaz_provider.py ---
+
+import json
+import time
+import uuid
+import asyncio
+import random
+import re
+import html
+from typing import Dict, Any, Optional, List
+from fastapi import HTTPException
+from fastapi.responses import StreamingResponse, JSONResponse
+from playwright.async_api import async_playwright, Page, BrowserContext, Error as PlaywrightError
+from loguru import logger
+import httpx
+
+from app.core.config import settings
+from app.utils.sse_utils import create_sse_data, create_chat_completion_chunk, DONE_CHUNK
+
+# --- 单个工作单元 (Worker) ---
+class BrowserWorker:
+    """代表一个独立的浏览器无痕窗口"""
+    def __init__(self, browser):
+        self.browser = browser
+        self.context: Optional[BrowserContext] = None
+        self.page: Optional[Page] = None
+        self.uses_count = 0
+        self.created_at = 0
+        self.id = str(uuid.uuid4())[:8]
+
+    async def init(self):
+        """初始化这个窗口"""
+        try:
+            if self.context:
+                await self.close()
+
+            # 创建无痕上下文
+            self.context = await self.browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                viewport={"width": 1920, "height": 1080},
+                locale="zh-CN",
+                timezone_id="Asia/Shanghai",
+                java_script_enabled=True,
+                bypass_csp=True,
+                ignore_https_errors=True
+            )
+            
+            self.page = await self.context.new_page()
+            # 屏蔽 webdriver 特征
+            await self.page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
+            
+            # 预热 (带重试机制)
+            logger.info(f"🔧 [Worker-{self.id}] 正在预热...")
+            
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    # 随机延迟
+                    await asyncio.sleep(random.uniform(1, 2))
+                    
+                    await self.page.goto(
+                        "https://toolbaz.com/writer/chat-gpt-alternative", 
+                        wait_until="domcontentloaded", 
+                        timeout=45000
+                    )
+                    break 
+                except PlaywrightError as e:
+                    if "ERR_CONNECTION_CLOSED" in str(e) or "Timeout" in str(e):
+                        logger.warning(f"⚠️ [Worker-{self.id}] 预热失败 (尝试 {attempt+1}/{max_retries}): {e}")
+                        if attempt == max_retries - 1:
+                            raise e 
+                        await asyncio.sleep(5) 
+                    else:
+                        raise e
+
+            # 稍微动一下鼠标
+            try:
+                await self.page.mouse.move(random.randint(100, 500), random.randint(100, 500))
+            except: pass
+            
+            self.created_at = time.time()
+            self.uses_count = 0
+            logger.info(f"✅ [Worker-{self.id}] 就绪")
+            return True
+        except Exception as e:
+            logger.error(f"❌ [Worker-{self.id}] 初始化失败: {e}")
+            await self.close()
+            return False
+
+    async def get_token_data(self):
+        """在这个特定窗口中获取 Token"""
+        if not self.page or self.page.is_closed():
+            success = await self.init()
+            if not success:
+                return {"error": "Worker re-init failed"}
+
+        try:
+            await self.page.wait_for_function("typeof window.xA1pY === 'function' || typeof xA1pY === 'function'", timeout=5000)
+        except:
+            try:
+                logger.warning(f"⚠️ [Worker-{self.id}] 函数未就绪，尝试刷新页面...")
+                await self.page.reload(wait_until="domcontentloaded", timeout=30000)
+                await asyncio.sleep(2)
+            except Exception as e:
+                return {"error": f"Reload failed: {str(e)}"}
+
+        result = await self.page.evaluate("""() => {
+            try {
+                function getCookie(name) {
+                    const value = `; ${document.cookie}`;
+                    const parts = value.split(`; ${name}=`);
+                    if (parts.length === 2) return parts.pop().split(';').shift();
+                    return null;
+                }
+                let sessionId = getCookie("SessionID");
+                if (!sessionId) {
+                    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+                    sessionId = "";
+                    for (let i = 0; i < 36; i++) sessionId += chars.charAt(Math.floor(Math.random() * chars.length));
+                    document.cookie = `SessionID=${sessionId}; path=/`;
+                }
+                
+                let token = "";
+                if (typeof window.xA1pY === 'function') token = window.xA1pY();
+                else if (typeof xA1pY === 'function') token = xA1pY();
+                else return { error: "xA1pY missing" };
+
+                return { sessionId, token };
+            } catch (e) { return { error: e.toString() }; }
+        }""")
+        
+        self.uses_count += 1
+        return result
+
+    async def close(self):
+        try:
+            if self.context: await self.context.close()
+        except: pass
+        self.context = None
+        self.page = None
+
+# --- 核心提供者 (Provider) ---
+class ToolbazProvider:
+    def __init__(self):
+        self.playwright = None
+        self.browser = None
+        self.pool = asyncio.Queue()
+        self.api_token_url = "https://data.toolbaz.com/token.php"
+        self.api_writing_url = "https://data.toolbaz.com/writing.php"
+        
+        # 🔥 限流器变量
+        self.request_timestamps: List[float] = []
+        self.rate_limit_lock = asyncio.Lock()
+
+    async def initialize(self):
+        """启动浏览器并创建池子"""
+        logger.info(f"🚀 正在启动浏览器集群 (并发数: {settings.BROWSER_POOL_SIZE})...")
+        self.playwright = await async_playwright().start()
+        
+        launch_args = [
+            "--no-sandbox", 
+            "--disable-setuid-sandbox", 
+            "--disable-dev-shm-usage", 
+            "--disable-gpu",
+            "--disable-blink-features=AutomationControlled"
+        ]
+        
+        self.browser = await self.playwright.chromium.launch(
+            headless=True,
+            args=launch_args
+        )
+
+        for i in range(settings.BROWSER_POOL_SIZE):
+            worker = BrowserWorker(self.browser)
+            asyncio.create_task(self._init_and_push_worker(worker))
+            await asyncio.sleep(3)
+        
+        logger.info(f"✅ 浏览器池启动指令已下发...")
+
+    async def _init_and_push_worker(self, worker: BrowserWorker):
+        success = await worker.init()
+        if success:
+            await self.pool.put(worker)
+        else:
+            logger.warning(f"⚠️ Worker-{worker.id} 初始化失败，10秒后重试...")
+            await asyncio.sleep(10)
+            await self._init_and_push_worker(worker)
+
+    async def _wait_for_rate_limit(self):
+        """🔥 核心限流逻辑：确保每分钟不超过5次请求"""
+        async with self.rate_limit_lock:
+            current_time = time.time()
+            # 清理超过60秒的旧记录
+            self.request_timestamps = [t for t in self.request_timestamps if current_time - t < 60]
+            
+            # 限制为每分钟 5 次 (留1次余量，设为4次比较安全)
+            MAX_REQUESTS_PER_MINUTE = 4 
+            
+            if len(self.request_timestamps) >= MAX_REQUESTS_PER_MINUTE:
+                # 计算需要等待的时间
+                oldest_request = self.request_timestamps[0]
+                wait_time = 60 - (current_time - oldest_request) + 1
+                if wait_time > 0:
+                    logger.warning(f"🚦 触发速率限制 (5req/min)，正在排队等待 {wait_time:.2f} 秒...")
+                    await asyncio.sleep(wait_time)
+            
+            # 记录这次请求的时间
+            self.request_timestamps.append(time.time())
+
+    def _clean_response_text(self, text: str) -> str:
+        if not text: return ""
+        text = text.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+        text = html.unescape(text)
+        text = re.sub(r'^\[model:.*?\]\s*', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'^Toolbaz.*?:', '', text, flags=re.IGNORECASE)
+        return text.strip()
+
+    async def chat_completion(self, request_data: Dict[str, Any]):
+        model = request_data.get("model", settings.DEFAULT_MODEL)
+        messages = request_data.get("messages", [])
+        stream = request_data.get("stream", True)
+        
+        last_user_content = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "Hello")
+        padding = "\u3164"
+        formatted_text = f"{padding} : {last_user_content}{padding}"
+
+        # 1. 获取 Worker
+        logger.info(f"⏳ 正在等待空闲浏览器窗口 (当前可用: {self.pool.qsize()})...")
+        worker: BrowserWorker = await self.pool.get()
+        
+        try:
+            logger.info(f"🤖 使用窗口 [Worker-{worker.id}] 处理请求...")
+            
+            if worker.uses_count > settings.CONTEXT_MAX_USES:
+                logger.info(f"♻️ 窗口 [Worker-{worker.id}] 使用次数过多，正在重建...")
+                await worker.init()
+
+            # 2. 获取凭证
+            security_data = await worker.get_token_data()
+            if security_data.get("error"):
+                logger.error(f"❌ [Worker-{worker.id}] Token获取失败: {security_data.get('error')}")
+                await worker.init()
+                security_data = await worker.get_token_data()
+                if security_data.get("error"):
+                    raise Exception(f"Token生成失败: {security_data['error']}")
+
+            session_id = security_data["sessionId"]
+            payload_token = security_data["token"]
+
+            # 🔥 3. 在发送请求前，执行限流检查
+            await self._wait_for_rate_limit()
+
+            # 4. 发送 HTTP 请求
+            async with httpx.AsyncClient() as client:
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Origin": "https://toolbaz.com",
+                    "Referer": "https://toolbaz.com/writer/chat-gpt-alternative",
+                    "X-Requested-With": "XMLHttpRequest",
+                    "Cookie": f"SessionID={session_id}"
+                }
+
+                token_resp = await client.post(
+                    self.api_token_url,
+                    data={"session_id": session_id, "token": payload_token},
+                    headers=headers,
+                    timeout=20
+                )
+                
+                if token_resp.status_code != 200:
+                    raise ValueError(f"Token API 状态码错误: {token_resp.status_code}")
+                
+                token_json = token_resp.json()
+                if not token_json.get("success"):
+                    raise ValueError(f"Token API 拒绝: {token_json}")
+                
+                capcha_token = token_json["token"]
+
+                chat_resp = await client.post(
+                    self.api_writing_url,
+                    data={
+                        "text": formatted_text,
+                        "capcha": capcha_token,
+                        "model": model,
+                        "session_id": session_id
+                    },
+                    headers=headers,
+                    timeout=120
+                )
+                
+                # 🔥 专门捕获 400 Quota Limit 错误
+                if chat_resp.status_code == 400 and "quota limit" in chat_resp.text:
+                    logger.warning("⚠️ 触发 API 硬性限流，返回 429 给客户端")
+                    # 归还 worker，因为 worker 本身没问题，是 IP 没额度了
+                    await self.pool.put(worker)
+                    return JSONResponse({"error": "Rate limit exceeded (5 req/min). Please wait."}, status_code=429)
+
+                if chat_resp.status_code != 200:
+                    raise ValueError(f"Writing API 错误: {chat_resp.status_code} - {chat_resp.text[:100]}")
+                
+                clean_text = self._clean_response_text(chat_resp.text)
+                request_id = f"chatcmpl-{uuid.uuid4()}"
+
+                # 5. 返回结果
+                if not stream:
+                    await self.pool.put(worker)
+                    logger.info(f"🔙 窗口 [Worker-{worker.id}] 已归还")
+                    return JSONResponse({
+                        "id": request_id,
+                        "object": "chat.completion",
+                        "created": int(time.time()),
+                        "model": model,
+                        "choices": [{"index": 0, "message": {"role": "assistant", "content": clean_text}, "finish_reason": "stop"}]
+                    })
+
+                async def stream_generator():
+                    try:
+                        chunk_size = 20
+                        for i in range(0, len(clean_text), chunk_size):
+                            part = clean_text[i:i+chunk_size]
+                            yield create_sse_data(create_chat_completion_chunk(request_id, model, part))
+                            await asyncio.sleep(0.02)
+                        yield create_sse_data(create_chat_completion_chunk(request_id, model, "", "stop"))
+                        yield DONE_CHUNK
+                    finally:
+                        await self.pool.put(worker)
+                        logger.info(f"🔙 窗口 [Worker-{worker.id}] 已归还 (流结束)")
+
+                return StreamingResponse(stream_generator(), media_type="text/event-stream")
+
+        except Exception as e:
+            logger.error(f"❌ [Worker-{worker.id}] 处理严重错误: {e}")
+            asyncio.create_task(self._recycle_worker(worker))
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def _recycle_worker(self, worker: BrowserWorker):
+        """后台回收并重置 Worker"""
+        logger.info(f"🔧 [Worker-{worker.id}] 正在后台重置...")
+        await asyncio.sleep(5)
+        success = await worker.init()
+        if success:
+            await self.pool.put(worker)
+            logger.info(f"✅ [Worker-{worker.id}] 重置成功并归还池子")
+        else:
+            logger.error(f"💀 [Worker-{worker.id}] 重置失败，尝试再次重置...")
+            await asyncio.sleep(10)
+            await self._recycle_worker(worker)
+
+    async def get_models(self):
+        return JSONResponse({
+            "object": "list",
+            "data": [
+                {"id": m, "object": "model", "created": int(time.time()), "owned_by": "toolbaz"}
+                for m in settings.MODELS
+            ]
+        })
+
+    async def close(self):
+        while not self.pool.empty():
+            worker = await self.pool.get()
+            await worker.close()
+        if self.browser:
+            await self.browser.close()
+        if self.playwright:
+            await self.playwright.stop()
+
+--- 文件路径: app\utils\__init__.py ---
+
+
+
+--- 文件路径: app\utils\sse_utils.py ---
+
+import json
+import time
+from typing import Dict, Any, Optional
+
+DONE_CHUNK = b"data: [DONE]\n\n"
+
+def create_sse_data(data: Dict[str, Any]) -> bytes:
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n".encode('utf-8')
+
+def create_chat_completion_chunk(
+    request_id: str,
+    model: str,
+    content: str,
+    finish_reason: Optional[str] = None
+) -> Dict[str, Any]:
+    return {
+        "id": request_id,
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": content},
+                "finish_reason": finish_reason
+            }
+        ]
+    }
+
+--- 文件路径: static\index.html ---
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Toolbaz-2API 开发者驾驶舱</title>
+    <style>
+        :root { --bg: #121212; --panel: #1E1E1E; --text: #E0E0E0; --primary: #00FF9D; --border: #333; }
+        body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', monospace; margin: 0; display: flex; height: 100vh; }
+        .sidebar { width: 300px; background: var(--panel); border-right: 1px solid var(--border); padding: 20px; display: flex; flex-direction: column; gap: 15px; }
+        .main { flex: 1; padding: 20px; display: flex; flex-direction: column; }
+        .box { background: #252525; padding: 15px; border-radius: 6px; border: 1px solid var(--border); }
+        h2 { margin: 0 0 10px 0; color: var(--primary); font-size: 18px; }
+        label { display: block; font-size: 12px; color: #888; margin-bottom: 5px; }
+        input, select, textarea { width: 100%; background: #333; border: 1px solid #444; color: #fff; padding: 8px; border-radius: 4px; box-sizing: border-box; margin-bottom: 10px; font-family: inherit; }
+        button { width: 100%; padding: 10px; background: var(--primary); border: none; border-radius: 4px; color: #000; font-weight: bold; cursor: pointer; }
+        button:hover { opacity: 0.9; }
+        button:disabled { background: #555; cursor: not-allowed; }
+        .chat-box { flex: 1; background: #000; border: 1px solid var(--border); border-radius: 6px; padding: 15px; overflow-y: auto; margin-bottom: 15px; font-size: 14px; line-height: 1.6; }
+        .msg { margin-bottom: 10px; padding: 10px; border-radius: 4px; max-width: 80%; }
+        .msg.user { background: #333; align-self: flex-end; margin-left: auto; }
+        .msg.ai { background: #1a1a1a; border: 1px solid #333; }
+        .status { font-size: 12px; color: #888; margin-top: auto; text-align: center; }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <div class="box">
+            <h2>🚀 Toolbaz-2API</h2>
+            <div style="font-size: 12px; color: #aaa;">Docker 铁甲舰版 v2.1</div>
+        </div>
+        <div class="box">
+            <label>API Key</label>
+            <input type="password" id="apiKey" value="1">
+            <label>模型</label>
+            <select id="model">
+                <option value="toolbaz-v4.5-fast">toolbaz-v4.5-fast</option>
+                <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+                <option value="gpt-5">gpt-5</option>
+            </select>
+        </div>
+        <div class="status">
+            状态: <span style="color:var(--primary)">● 浏览器引擎就绪</span>
+        </div>
+    </div>
+    <div class="main">
+        <div class="chat-box" id="chatBox">
+            <div class="msg ai">系统已就绪。我是基于 Playwright 驱动的 Toolbaz 代理。请提问...</div>
+        </div>
+        <div style="display:flex; gap:10px;">
+            <textarea id="prompt" rows="1" placeholder="输入消息..." style="margin:0;"></textarea>
+            <button style="width:100px; margin:0;" onclick="send()" id="btn">发送</button>
+        </div>
+    </div>
+
+    <script>
+        async function send() {
+            const prompt = document.getElementById('prompt').value;
+            if(!prompt) return;
+            
+            const chatBox = document.getElementById('chatBox');
+            const btn = document.getElementById('btn');
+            const apiKey = document.getElementById('apiKey').value;
+            const model = document.getElementById('model').value;
+
+            chatBox.innerHTML += `<div class="msg user">${prompt}</div>`;
+            document.getElementById('prompt').value = '';
+            btn.disabled = true;
+            btn.innerText = "生成中...";
+
+            const aiMsg = document.createElement('div');
+            aiMsg.className = 'msg ai';
+            aiMsg.innerText = "▋";
+            chatBox.appendChild(aiMsg);
+            chatBox.scrollTop = chatBox.scrollHeight;
+
+            try {
+                const res = await fetch('/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${apiKey}`
+                    },
+                    body: JSON.stringify({
+                        model: model,
+                        messages: [{role: "user", content: prompt}],
+                        stream: true
+                    })
+                });
+
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder();
+                let fullText = "";
+
+                while(true) {
+                    const {done, value} = await reader.read();
+                    if(done) break;
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+                    for(const line of lines) {
+                        if(line.startsWith('data: ')) {
+                            const data = line.slice(6);
+                            if(data === '[DONE]') break;
+                            try {
+                                const json = JSON.parse(data);
+                                const content = json.choices[0].delta.content;
+                                if(content) {
+                                    fullText += content;
+                                    aiMsg.innerText = fullText + "▋";
+                                    chatBox.scrollTop = chatBox.scrollHeight;
+                                }
+                            } catch(e){}
+                        }
+                    }
+                }
+                aiMsg.innerText = fullText;
+            } catch(e) {
+                aiMsg.innerText += `\n[错误: ${e.message}]`;
+                aiMsg.style.color = "#ff5555";
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "发送";
+            }
+        }
+    </script>
+</body>
+</html>
+
+
