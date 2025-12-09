@@ -28,6 +28,9 @@ RUN playwright install chromium --with-deps
 # 复制应用代码
 COPY . .
 
+# 验证静态文件是否正确复制
+RUN ls -la /app/ && ls -la /app/static/ || echo "Warning: static directory not found"
+
 # 创建非 root 用户 (安全最佳实践)
 RUN useradd --create-home appuser && \
     chown -R appuser:appuser /app && \
