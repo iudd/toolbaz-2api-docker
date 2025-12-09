@@ -1,16 +1,52 @@
 ---
-title: Toolbaz-2API Docker
+title: Toolbaz-2API
 emoji: 🤖
 colorFrom: blue
 colorTo: green
-sdk: docker
-sdk_version: "latest"
+sdk: gradio
+sdk_version: "4.44.0"
 app_file: main.py
 pinned: false
 license: apache-2.0
 datasets: []
 tags: []
 ---
+
+# ⚠️ HuggingFace Spaces 部署说明
+
+## 🚨 重要限制提醒
+
+**HuggingFace Spaces有以下限制，可能影响此项目的正常运行：**
+
+1. **🌐 网络访问限制**：可能无法访问外部AI网站（如Toolbaz）
+2. **💾 资源限制**：Playwright浏览器需要较多内存，可能超过HF限制
+3. **⏱️ 启动超时**：浏览器初始化可能超过HF的启动时间限制
+
+## 🔧 推荐解决方案
+
+如果遇到问题，建议：
+1. 使用自己的VPS/云服务器部署
+2. 使用GitHub Codespaces
+3. 使用支持更多资源的平台
+
+## 📋 HF Spaces 部署步骤
+
+### 方案A：直接部署（有限制）
+1. 创建新的HF Space
+2. 选择Gradio SDK
+3. 上传代码（包括app_hf.py）
+4. 设置app_file为app_hf.py
+5. 等待部署完成
+
+### 方案B：自建后端 + HF前端（推荐）
+1. 在自己的VPS上部署后端API
+2. 在HF Spaces上部署前端界面
+3. 配置跨域访问
+
+### 方案C：GitHub Codespaces
+1. 使用GitHub提供的免费云环境
+2. 完整功能支持
+3. 可以长时间运行
 
 Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
 
