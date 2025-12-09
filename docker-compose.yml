@@ -13,6 +13,9 @@ services:
     dns:
       - 8.8.8.8
       - 1.1.1.1
+    # 确保静态文件目录挂载（开发环境）
+    volumes:
+      - ./static:/app/static:ro
     networks:
       - toolbaz-net
 

@@ -57,7 +57,51 @@ async def list_models():
 @app.get("/", response_class=HTMLResponse)
 async def root():
     try:
-        with open("static/index.html", "r", encoding="utf-8") as f:
+        # 使用绝对路径处理静态文件
+        import os
+        static_path = os.path.join(os.getcwd(), "static", "index.html")
+        with open(static_path, "r", encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
-        return "Toolbaz-2API Running. (static/index.html not found)"
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Toolbaz-2API Running</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 40px; background: #121212; color: #fff; }
+                .container { max-width: 800px; margin: 0 auto; padding: 20px; }
+                .status { color: #00ff9d; font-weight: bold; }
+                .endpoint { background: #1e1e1e; padding: 10px; margin: 10px 0; border-radius: 5px; }
+                code { background: #333; padding: 2px 5px; border-radius: 3px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🚀 Toolbaz-2API 服务运行中</h1>
+                <p class="status">✅ API服务已就绪</p>
+                
+                <h3>📋 可用端点：</h3>
+                <div class="endpoint">
+                    <strong>POST</strong> <code>/v1/chat/completions</code> - 聊天完成接口
+                </div>
+                <div class="endpoint">
+                    <strong>GET</strong> <code>/v1/models</code> - 模型列表接口
+                </div>
+                
+                <h3>🔑 API调用示例：</h3>
+                <pre style="background: #1e1e1e; padding: 15px; border-radius: 5px;">
+curl -X POST http://localhost:8000/v1/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer 1" \\
+  -d '{
+    "model": "toolbaz-v4.5-fast",
+    "messages": [{"role": "user", "content": "你好"}]
+  }'
+                </pre>
+                
+                <p><small>注意：静态文件未找到，显示此备用页面</small></p>
+            </div>
+        </body>
+        </html>
+        """
