@@ -5,7 +5,7 @@ colorFrom: blue
 colorTo: green
 sdk: gradio
 sdk_version: "4.44.0"
-app_file: main.py
+app_file: app_hf_lite.py
 pinned: false
 license: apache-2.0
 datasets: []
