@@ -7,6 +7,7 @@ HuggingFace Spaces 完整功能版本
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
 import logging
 import requests
 import time
