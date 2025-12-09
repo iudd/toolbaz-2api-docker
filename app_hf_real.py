@@ -239,6 +239,7 @@ HTML_PAGE = """
                 <span class="badge success" id="envBadge">真实API</span>
             </div>
             <div class="status-item">
+                <button onclick="installBrowsers()" style="margin-right: 10px; padding: 5px 10px; font-size: 12px; background: var(--warning);">📦 安装浏览器</button>
                 <button onclick="checkModels()" style="margin-right: 10px; padding: 5px 10px; font-size: 12px;">刷新模型</button>
                 <button onclick="checkStatus()" style="padding: 5px 10px; font-size: 12px;">检查状态</button>
             </div>
@@ -385,6 +386,37 @@ curl -X POST /v1/chat/completions \\
             }
         }
         
+        // 安装浏览器
+        async function installBrowsers() {
+            const installBtn = event.target;
+            const originalText = installBtn.textContent;
+            
+            installBtn.disabled = true;
+            installBtn.textContent = '📦 安装中...';
+            
+            try {
+                const response = await fetch('/install-browsers', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert('✅ 浏览器安装成功！');
+                    // 重新检查状态
+                    setTimeout(checkStatus, 2000);
+                } else {
+                    alert(`❌ 安装失败: ${result.message}`);
+                }
+            } catch (error) {
+                alert(`❌ 安装异常: ${error.message}`);
+            } finally {
+                installBtn.disabled = false;
+                installBtn.textContent = originalText;
+            }
+        }
+        
         // 检查模型列表
         async function checkModels() {
             try {
@@ -431,7 +463,8 @@ curl -X POST /v1/chat/completions \\
             chatBox.scrollTop = chatBox.scrollHeight;
             
             try {
-                const response = await fetch('/v1/chat/completions', {
+                // 首先尝试标准OpenAI API路径
+                let response = await fetch('/v1/chat/completions', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -443,6 +476,20 @@ curl -X POST /v1/chat/completions \\
                         stream: streamEnabled
                     })
                 });
+                
+                // 如果404，尝试备用路径
+                if (response.status === 404) {
+                    response = await fetch('/chat', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            message: message,
+                            model: modelSelect.value
+                        })
+                    });
+                }
                 
                 if (streamEnabled) {
                     // 流式响应处理
@@ -575,7 +622,8 @@ async def health():
                 "status": "🟡 浏览器正在初始化",
                 "success": False,
                 "version": "v3.1.0",
-                "environment": "HuggingFace Spaces - 初始化中"
+                "environment": "HuggingFace Spaces - 初始化中",
+                "note": "HF环境中Playwright可能需要手动安装"
             }
     except Exception as e:
         return {
@@ -584,6 +632,61 @@ async def health():
             "version": "v3.1.0",
             "environment": "HuggingFace Spaces - 错误"
         }
+
+@app.post("/install-browsers")
+async def install_browsers():
+    """安装Playwright浏览器（仅限HF环境）"""
+    try:
+        import subprocess
+        import sys
+        
+        logger.info("🔄 开始安装Playwright浏览器...")
+        result = subprocess.run([
+            sys.executable, "-m", "playwright", "install", "chromium", "--with-deps"
+        ], capture_output=True, text=True, timeout=300)
+        
+        if result.returncode == 0:
+            logger.info("✅ Playwright浏览器安装成功")
+            # 尝试重新初始化provider
+            try:
+                await provider.initialize()
+                return {"success": True, "message": "浏览器安装成功并已初始化"}
+            except Exception as e:
+                return {"success": False, "message": f"浏览器安装成功但初始化失败: {str(e)}"}
+        else:
+            logger.error(f"❌ 浏览器安装失败: {result.stderr}")
+            return {"success": False, "message": f"安装失败: {result.stderr}"}
+            
+    except Exception as e:
+        logger.error(f"❌ 安装过程异常: {e}")
+        return {"success": False, "message": f"安装异常: {str(e)}"}
+
+# 添加一个简单的聊天端点作为备用
+@app.post("/chat")
+async def simple_chat(request: Request):
+    """简单的聊天端点，用于测试"""
+    try:
+        data = await request.json()
+        message = data.get("message", "")
+        model = data.get("model", "toolbaz-v4.5-fast")
+        
+        # 如果真实API可用，使用真实API
+        try:
+            response = await provider.chat_completion({
+                "model": model,
+                "messages": [{"role": "user", "content": message}],
+                "stream": False
+            })
+            return response
+        except Exception as e:
+            # 如果真实API失败，返回说明
+            return {
+                "response": f"❌ 真实API不可用: {str(e)}\n\n💡 在HF环境中，Playwright浏览器可能无法正常工作。\n建议:\n1. 点击'安装浏览器'按钮\n2. 使用自有服务器部署\n3. 等待我们修复HF环境问题",
+                "error": str(e)
+            }
+            
+    except Exception as e:
+        return {"error": f"请求处理失败: {str(e)}"}
 
 # 使用原始的API端点
 @app.post("/v1/chat/completions")
