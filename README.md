@@ -6,7 +6,7 @@ colorTo: green
 sdk: docker
 sdk_version: "latest"
 dockerfile: "Dockerfile.hf"
-app_file: app_hf_enhanced.py
+app_file: app_hf_stable.py
 pinned: false
 license: apache-2.0
 datasets: []
