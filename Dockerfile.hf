@@ -42,4 +42,4 @@ USER appuser
 EXPOSE 7860
 
 # HF Spaces启动命令
-CMD ["python", "app_hf_real.py"]
+CMD ["python", "app_hf_enhanced.py"]
