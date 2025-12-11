@@ -3,13 +3,27 @@ title: Toolbaz-2API
 emoji: 🤖
 colorFrom: blue
 colorTo: green
-sdk: gradio
-sdk_version: "4.44.0"
+sdk: docker
+sdk_version: "latest"
+dockerfile: "Dockerfile.hf"
 app_file: app_hf_real.py
 pinned: false
 license: apache-2.0
 datasets: []
 tags: []
+# HF Spaces 专用配置
+python_version: "3.10"
+python_packages:
+  - "fastapi==0.104.1"
+  - "uvicorn[standard]==0.24.0"
+  - "playwright==1.40.0"
+  - "requests==2.31.0"
+  - "loguru==0.7.2"
+  - "httpx==0.25.2"
+  - "pydantic==2.5.0"
+  - "pydantic-settings==2.1.0"
+  - "aiofiles==23.2.1"
+  - "python-multipart==0.0.6"
 ---
 
 # ⚠️ HuggingFace Spaces 部署说明
