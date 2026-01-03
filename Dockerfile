@@ -10,12 +10,10 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 WORKDIR /app
 
 # 安装系统依赖（包括Playwright需要的）
+# 移除 software-properties-common 等可能导致构建失败的包
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
-    gnupg \
-    software-properties-common \
-    apt-transport-https \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
