@@ -149,9 +149,11 @@ class ToolbazProvider:
         # 🔥 限流器变量
         self.request_timestamps: List[float] = []
         self.rate_limit_lock = asyncio.Lock()
+        self.running = False
 
     async def initialize(self):
         """启动浏览器并创建池子"""
+        self.running = True
         logger.info(f"🚀 正在启动浏览器集群 (并发数: {settings.BROWSER_POOL_SIZE})...")
         self.playwright = await async_playwright().start()
         
@@ -171,15 +173,23 @@ class ToolbazProvider:
         for i in range(settings.BROWSER_POOL_SIZE):
             worker = BrowserWorker(self.browser)
             asyncio.create_task(self._init_and_push_worker(worker))
-            await asyncio.sleep(3)
+            await asyncio.sleep(1)
         
         logger.info(f"✅ 浏览器池启动指令已下发...")
 
     async def _init_and_push_worker(self, worker: BrowserWorker):
+        if not self.running:
+            return
+
         success = await worker.init()
         if success:
-            await self.pool.put(worker)
+            if self.running:
+                await self.pool.put(worker)
+            else:
+                await worker.close()
         else:
+            if not self.running:
+                return
             logger.warning(f"⚠️ Worker-{worker.id} 初始化失败，10秒后重试...")
             await asyncio.sleep(10)
             await self._init_and_push_worker(worker)
@@ -354,6 +364,7 @@ class ToolbazProvider:
         })
 
     async def close(self):
+        self.running = False
         while not self.pool.empty():
             worker = await self.pool.get()
             await worker.close()
