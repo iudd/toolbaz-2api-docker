@@ -14,10 +14,12 @@ class Settings(BaseSettings):
     # 🔥 完整模型列表 (恢复了之前的所有模型)
     MODELS: List[str] = [
         "toolbaz-v4.5-fast",
+        "gemini-3-flash",
         "gemini-2.5-flash",
         "gemini-2.5-pro",
         "claude-sonnet-4",
         "gpt-5",
+        "gpt-5.2",
         "grok-4-fast"
     ]
     DEFAULT_MODEL: str = "toolbaz-v4.5-fast"
@@ -29,5 +31,6 @@ class Settings(BaseSettings):
     
     # 默认每个窗口用 50 次就重置
     CONTEXT_MAX_USES: int = 50 
+
 
 settings = Settings()
