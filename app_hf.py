@@ -21,10 +21,13 @@ class ToolbazHFInterface:
         self.api_key = os.environ.get("API_KEY", "1")
         self.models = [
             "toolbaz-v4.5-fast",
-            "gemini-2.5-flash", 
+            "gemini-2.5-flash",
+            "gemini-3-flash", 
+            "gemini-3.1-flash-lite",
             "gemini-2.5-pro",
             "claude-sonnet-4",
             "gpt-5",
+            "gpt-5.2",
             "grok-4-fast"
         ]
     
