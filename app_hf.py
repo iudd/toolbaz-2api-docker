@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 HuggingFace Spaces 版本的 Toolbaz-2API
-使用Gradio界面替代FastAPI，更适合HF环境
+使用Gradio界面替代FastAPI，更适合HF环境.加模型3.13
 """
 
 import gradio as gr
