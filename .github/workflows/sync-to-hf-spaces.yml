@@ -58,7 +58,7 @@ jobs:
                   exit(1)
           else:
               print("⚠️ 没有发现需要上传的文件。")
-          # 4. 重启 Spaces
+          # 4. 重启 Spaces 空提交
           try:
               api.restart_space(repo_id=space_id)
               print("✅ Spaces 重启指令已发送！")
